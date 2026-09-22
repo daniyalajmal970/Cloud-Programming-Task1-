@@ -1,6 +1,6 @@
 # Task 1: Highly available web hosting on AWS (Terraform)
 
-Cloud Programming (CSEBSEPCP01_E), Portfolio Part 2.
+Cloud Programming (CSEBSEPCP01_E), IU International University.
 
 This Terraform project deploys a "Hello World" website with the following components:
 
@@ -44,7 +44,7 @@ Users ──HTTPS──► CloudFront (edge cache) ──HTTP + secret header─
    - AWS CLI v2: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
    - Terraform ≥ 1.10: https://developer.hashicorp.com/terraform/install
    - Git: https://git-scm.com/downloads
-   - Optional, for the load test: `hey`, from https://github.com/rakyll/hey
+   - No extra load-test tool needed (the script uses curl)
    - On Windows, run the `.sh` scripts in **Git Bash** or **WSL**.
 4. **Configure the CLI:**
    ```bash
@@ -60,7 +60,7 @@ cp terraform.tfvars.example terraform.tfvars   # optional: adjust values
 terraform init        # downloads the AWS and random providers
 terraform fmt -check  # code style check
 terraform validate    # syntax / reference check
-terraform plan -out tfplan    # review: about 40 resources to add
+terraform plan -out tfplan    # review: 38 resources to add
 terraform apply tfplan
 ```
 
@@ -73,7 +73,7 @@ alb_dns_name = "hello-web-alb-123456.eu-central-1.elb.amazonaws.com"
 ...
 ```
 
-Open `website_url` in the browser to see the Hello World page. Opening `http://<alb_dns_name>` directly returns **403** on purpose, because the origin is protected.
+Open `website_url` in the browser to see the Hello World page. Opening `http://<alb_dns_name>` directly **fails to connect** on purpose: the ALB security group only accepts CloudFront's IP ranges. (Requests from CloudFront without the secret header would get a 403 from the listener rule, a second layer.)
 
 ## 3. Test the requirements
 
@@ -83,25 +83,11 @@ Run these from the `terraform/` folder.
 |---|---|---|
 | Load balancing | open `whoami_url` and reload several times | instance ID and AZ alternate |
 | High availability | `./scripts/test_failover.sh` | the site keeps answering HTTP 200 while one instance is terminated; the ASG launches a replacement |
-| Autoscaling | `./scripts/load_test.sh 8m 30` | desired capacity rises above 2 after a few minutes and falls back later |
+| Autoscaling | `./scripts/load_test.sh 8 30` | desired capacity rises above 2 after a few minutes and falls back later |
 | Latency / CDN | `./scripts/check_latency.sh` | `x-cache: Hit from cloudfront`, low time to first byte, `x-amz-cf-pop` shows the edge location |
-| Origin protection | `curl -i http://<alb_dns_name>` | `403 Access denied` |
+| Origin protection | `curl -i --max-time 10 http://<alb_dns_name>` | connection timed out / failed to connect (blocked by the security group) |
 
-## 4. Screenshots to take for the Phase 2 presentation
-
-1. The output of `terraform plan` (the summary line) and of `terraform apply` (the outputs).
-2. The Hello World page in the browser at the CloudFront URL.
-3. `whoami.html` answered from **two different AZs**.
-4. EC2 console → Auto Scaling Groups → *Instance management* tab, showing 2 instances in 2 AZs.
-5. EC2 → Target groups → *Targets* tab, showing all targets **healthy**.
-6. Terminal output of `test_failover.sh`.
-7. Terminal output of `load_test.sh`, plus ASG → *Activity* tab with the scale-out events.
-8. The CloudWatch dashboard (requests, CPU, healthy hosts, instances in service).
-9. `check_latency.sh` output with `Hit from cloudfront`.
-10. `curl` against the ALB returning 403.
-11. The GitHub repository page showing the code.
-
-## 5. Clean up (important, to avoid costs)
+## 4. Clean up (important, to avoid costs)
 
 ```bash
 terraform destroy
@@ -109,14 +95,14 @@ terraform destroy
 
 The ALB and EC2 instances are billed per hour, so destroy the stack whenever you are not testing or taking screenshots. You can recreate it at any time with `terraform apply`.
 
-## 6. Optional extensions
+## 5. Optional extensions
 
 - **Remote state.** Create an S3 bucket, e.g. `aws s3 mb s3://<unique-name>-tfstate`, enable versioning, uncomment the `backend "s3"` block in `versions.tf` and run `terraform init -migrate-state`. Terraform ≥ 1.10 locks the state natively in S3 (`use_lockfile`), so the DynamoDB table planned in Phase 1 is no longer needed.
 - **Custom domain.** Uncomment the Route 53/ACM block in `cdn.tf`. Note that the certificate must be in `us-east-1`.
 - **Shell access.** Set `enable_ssm_endpoints = true` to use SSM Session Manager in the private subnets. This adds small hourly costs.
 - **E-mail alarms.** Set `alarm_email` and confirm the subscription e-mail.
 
-## 7. Quality checks performed
+## 6. Quality checks performed
 
 - `terraform fmt`: consistent formatting.
 - `tflint` with the AWS ruleset: no issues.
@@ -128,5 +114,5 @@ The ALB and EC2 instances are billed per hour, so destroy the stack whenever you
 |---|---|
 | Targets stay *unhealthy* | Wait about 3 minutes after launch. Check *EC2 → Instance → Actions → Monitor → Get system log*, where the user-data output is visible. If `dnf` could not reach the repositories, the script falls back to Python's built-in web server, so the health check still passes. |
 | CloudFront shows 403 / 502 | The distribution may still be deploying (wait). Check that the targets are healthy. |
-| The load test does not scale out | Increase concurrency (`./scripts/load_test.sh 10m 60`). Target tracking reacts after about 3 minutes of sustained load. |
+| The load test does not scale out | Increase concurrency (`./scripts/load_test.sh 10 60`). Target tracking reacts after about 3 minutes of sustained load. |
 | `terraform destroy` hangs on the ALB/ENIs | Wait a few minutes and run it again. |
