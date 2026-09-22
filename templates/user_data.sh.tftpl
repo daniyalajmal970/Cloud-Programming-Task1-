@@ -1,0 +1,69 @@
+#!/bin/bash
+# Bootstrap script executed once at first boot of every web server.
+# Rendered by Terraform's templatefile(): "$${...}" is a literal shell variable.
+set -euxo pipefail
+
+# --- Instance metadata (IMDSv2) -------------------------------------------
+TOKEN=$(curl -sS -X PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+meta() { curl -sS -H "X-aws-ec2-metadata-token: $${TOKEN}" "http://169.254.169.254/latest/meta-data/$1"; }
+INSTANCE_ID=$(meta instance-id)
+AZ=$(meta placement/availability-zone)
+
+# --- Web server -----------------------------------------------------------
+# nginx is installed from the Amazon Linux repositories through the S3
+# gateway endpoint. If that fails, fall back to Python's built-in web server
+# so the instance still passes its health check.
+WEBROOT=/usr/share/nginx/html
+if timeout 150 dnf install -y --setopt=timeout=15 --setopt=retries=2 nginx; then
+  USE_NGINX=1
+else
+  USE_NGINX=0
+  WEBROOT=/var/www/html
+fi
+mkdir -p "$${WEBROOT}"
+
+cat > "$${WEBROOT}/index.html" <<HTML
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Hello World - ${project_name}</title>
+<style>body{font-family:Arial,sans-serif;margin:15vh auto;max-width:640px;text-align:center;color:#232F3E}
+small{color:#666}</style></head>
+<body>
+  <h1>Hello, World!</h1>
+  <p>This page is served by a highly available, auto-scaling AWS architecture
+     (CloudFront &rarr; Application Load Balancer &rarr; EC2 Auto Scaling Group),
+     provisioned with Terraform.</p>
+  <small>Cloud Programming (CSEBSEPCP01_E) &middot; Task 1</small>
+</body>
+</html>
+HTML
+
+# Uncached page (see CloudFront behaviour) that shows which server answered.
+cat > "$${WEBROOT}/whoami.html" <<HTML
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>whoami</title></head>
+<body style="font-family:Arial,sans-serif">
+  <h2>Served by instance $${INSTANCE_ID}</h2>
+  <p>Availability Zone: <b>$${AZ}</b></p>
+</body></html>
+HTML
+
+echo "OK" > "$${WEBROOT}/health"
+
+if [ "$${USE_NGINX}" = "1" ]; then
+  systemctl enable --now nginx
+else
+  cat > /etc/systemd/system/fallback-web.service <<UNIT
+[Unit]
+Description=Fallback static web server
+After=network.target
+[Service]
+ExecStart=/usr/bin/python3 -m http.server 80 --directory $${WEBROOT}
+Restart=always
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable --now fallback-web
+fi
